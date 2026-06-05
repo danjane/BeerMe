@@ -2,60 +2,120 @@
 
 BeerMe is a privacy-preserving app for spontaneous beer meetups.
 
-The project is split into product tasks and technology areas.
+
 
 ## Product tasks
 
-The three main BeerMe tasks are:
+The four main BeerMe tasks are:
 
 1. Become BeerFriends
-   - Two users become BeerFriends only after mutual, deliberate pairing.
-   - Preferred pairing method: in-person QR-code exchange.
-   - Do not use phone numbers for discovery or key generation.
+
+   * Two users become BeerFriends only after mutual, deliberate pairing.
+   * Preferred pairing method: QR-code exchange in person.
+   * Open design question: should in-person pairing be strengthened using BLE proximity, coarse GPS, short-lived QR codes, or a combination?
+   * Do not use phone numbers for discovery or key generation.
+   * Do not use usernames, emails, or other stable public identifiers for discovery.
+   * A user cannot silently remove a BeerFriend in v1.
+   * Future revocation/blocking is out of scope for now.
 
 2. Send BeerMe Signal
-   - The user presses one button to send a BeerMe signal.
-   - Normal signal: BeerFriends.
-   - Wide signal: BeerFriends and their BeerFriends.
-   - The sender's identity should not be revealed.
-   - The signal may include current location, captured only when the button is pressed.
-   - There should be a cooldown, roughly 1 hour.
 
-3. Locate BeerFriend with BLE
-   - After a BeerMe signal, BLE may help nearby BeerFriends find each other.
-   - BLE should use temporary rotating identifiers.
-   - BLE should not reveal stable user identity.
-   - BLE should run only during a temporary BeerMe discovery session.
+   * The user presses one button to send a BeerMe signal.
+   * Normal signal: BeerFriends notified.
+   * Wide signal: BeerFriends and their BeerFriends.
+   * Avoid implementations where Alice posts one separate message per BeerFriend.
+   * A Wide signal should use a TTL-style forwarding model, initially TTL=2, so that the sender does not post one separate message per BeerFriend.
+   * The TTL design is not a complete protocol. Any TTL forwarding prototype must document what metadata the backend can observe and whether forwarding leaks friendship relationships.
+   * The sender's identity should not be revealed in the app UI.
+   * The signal includes the location captured when the button was pressed.
+   * The location must be encrypted in a BeerBottle so that the backend and non-BeerFriends cannot read it.
 
-## Technology areas
+3. DrinkBeer mode
 
-Use these folders:
+   * After sending a BeerMe signal, the app enters DrinkBeer mode for 1 hour.
+   * During this hour, the user cannot send another BeerMe signal.
+   * During this hour, the app does not receive or display new BeerMe signals.
+   * During this hour, BLE discovery may run if the user has granted permission.
 
-- `python/`
-  - For prototypes, simulations, cryptography experiments, backend/mailbox experiments, and test-vector generation.
-  - Python code should be simple, readable, and heavily commented.
 
-- `kotlin-android/`
-  - For Android-native work.
-  - Use this especially for BLE, secure local storage, QR scanning, notifications, and Android permissions.
+4. Locate BeerFriend with BLE
 
-- `flutter/`
-  - For cross-platform UI experiments targeting Android and iOS.
-  - Flutter may call native Kotlin/Swift code where BLE or cryptographic storage requires platform-specific behaviour.
+   * BLE technology can help nearby BeerFriends find each other during a temporary discovery session.
+   * BLE should use temporary rotating identifiers.
+   * BLE should not reveal stable user identity.
+   * BLE detection should be able to run during the DrinkBeer hour.
 
-- `shared/`
-  - For message formats, protocol notes, sample keys, and test vectors shared across implementations.
+## Key and message model
 
-## Privacy principles
+Use the following project vocabulary consistently.
 
-- The backend should know as little as possible.
-- The backend should not know the friendship graph if avoidable.
-- The backend should not know how many BeerFriends a user has if avoidable.
-- Sender identity should not be shown in BeerMe notifications.
-- Location is shared only at the moment of pressing the BeerMe button.
-- Avoid permanent tracking.
-- Avoid phone-number-based discovery.
-- Prefer QR-code pairing.
+### BeerFriend key pair
+
+On first app launch, each device creates a BeerFriend key pair.
+   * Used for becoming BeerFriends and for BLE-related friendship checks.
+   * The public BeerFriend key may be shared during QR pairing.
+   * The private BeerFriend key never leaves the device.
+
+### BeerBottle
+
+A BeerBottle is an encrypted BeerMe signal packet.
+   * It is posted to the backend.
+   * It may be distributed to many users.
+   * It contains encrypted private event information, including the location captured when the BeerMe button was pressed.
+   * The backend may see the BeerBottle, but must not be able to open it.
+   * Non-BeerFriends may see the BeerBottle, but must not be able to open it.
+
+### BeerOpener
+
+A BeerOpener is the secret or key material that lets a BeerFriend open/decrypt a BeerBottle.
+   * BeerOpener material is exchanged during BeerFriend pairing.
+   * Only BeerFriends should have enough BeerOpener material to open each other's future BeerBottles.
+   * Treat BeerOpener material as sensitive and store it securely.
+
+### QR pairing exchange
+
+When two users become BeerFriends, the QR exchange shares:
+   * the user's public BeerFriend key,
+   * the user's BeerOpener information needed for future BeerBottle decryption,
+   * protocol version,
+   * message-format version,
+   * metadata needed for decoding, decrypting, or verifying messages.
+
+Do not use phone numbers, usernames, emails, or stable public identifiers for discovery.
+
+## BeerMe signal flow
+
+When Alice sends a BeerMe signal:
+1. Alice creates a private BeerMe payload containing the event location and other event information.
+2. Alice seals this payload inside an encrypted BeerBottle.
+3. Alice posts the BeerBottle to the backend.
+4. The backend can distribute the BeerBottle but cannot open it or read the location.
+5. Alice's BeerFriends use their BeerOpener material to try to open the BeerBottle.
+6. Other BeerMe users cannot open the BeerBottle or read the location.
+7. The app notification should not reveal Alice's identity in the UI.
+
+Known v1 limitation:
+   * If each BeerFriend has sender-specific BeerOpener material, the receiving device may be able to infer which BeerFriend sent the BeerBottle.
+   * The app UI should still avoid showing the sender's identity.
+   * Any stronger sender-anonymity design must be documented separately before implementation.
+
+## Backend assumptions
+
+The backend is a bulletin board for BeerMe signal packets.
+
+The backend should be able to:
+   * receive BeerBottle packets,
+   * rate-limit or reject obvious spam where possible,
+   * distribute packets to clients.
+
+The backend should not be able to:
+   * identify the sender,
+   * identify recipients,
+   * read the location inside a BeerBottle,
+   * infer the friendship graph,
+   * infer the number of BeerFriends a user has,
+   * permanently track user location,
+   * link multiple BeerMe signals to the same stable identity unless unavoidable and documented.
 
 ## Development method: TDD
 
@@ -72,34 +132,46 @@ For any new feature or protocol behaviour:
 
 Testing expectations:
 
-- Python prototypes should use `pytest`.
-- Kotlin Android code should have unit tests for pure logic and instrumented tests only when platform behaviour requires it.
-- Flutter code should use widget tests for UI behaviour and unit tests for protocol-independent logic.
-- Shared protocol formats should have test vectors in `shared/test-vectors/`.
-- Security-sensitive behaviour must have explicit tests, especially for:
-  - QR pairing data format,
-  - key generation/import/export,
-  - message encoding/decoding,
-  - cooldown rules,
-  - temporary BLE identifiers,
-  - prevention of stable identity leakage.
+* Python prototypes should use `pytest`.
+* Kotlin Android code should have unit tests for pure logic and instrumented tests only when platform behaviour requires it.
+* Flutter code should use widget tests for UI behaviour and unit tests for protocol-independent logic.
+* Shared protocol formats should have test vectors in `shared/test-vectors/`.
+* Security-sensitive behaviour must have explicit tests, especially for:
+
+
+  * QR pairing data format,
+  * key generation/import/export,
+  * BeerBottle creation,
+  * BeerBottle opening/decryption,
+  * message encoding/decoding,
+  * cooldown rules,
+  * temporary BLE identifiers,
+  * prevention of stable identity leakage.
 
 Do not add large untested features.
 
-When Codex is asked to implement a task, it should first identify:
-- the relevant BeerMe task,
-- the relevant technology area,
-- the expected tests,
-- the smallest testable behaviour to implement.
+## Security and privacy discipline
 
-## How to work
+Codex must not invent new protocol assumptions silently.
 
-When asked to implement something:
+When implementing privacy-sensitive features, Codex should:
 
-1. First identify which product task it belongs to.
-2. Then identify the correct technology area.
-3. Identify the tests that should exist before writing implementation code.
-4. Prefer small prototypes before large architecture changes.
-5. Do not mix Python, Kotlin, and Flutter code in the same folder.
-6. Keep protocol assumptions documented in `docs/` or `shared/`.
-7. If changing behaviour, update the relevant file in `tasks/`.
+1. State the assumption being used.
+2. Add or update tests for the assumption.
+3. Add test vectors where messages, keys, or encodings are involved.
+4. Document privacy leaks or limitations explicitly.
+5. Prefer small simulations in `python/` before mobile implementation.
+
+For protocol or security-sensitive changes, first update or create a short note in `docs/` describing:
+
+* what the attacker can observe,
+* what the backend can observe,
+* what a malicious user can attempt,
+* what privacy properties the design is trying to preserve,
+* known limitations.
+
+Do not implement custom cryptographic primitives.
+
+Use established libraries and keep cryptographic code small, explicit, and tested.
+
+S
